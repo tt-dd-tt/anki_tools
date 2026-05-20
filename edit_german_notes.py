@@ -102,19 +102,71 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
     modified = False
     updates = {}
     
-    # Process de_word field to make it bold
-    if "de_word" in fields:
-        de_word_content = fields["de_word"]["value"].strip()
+    # Try to determine gender from en_word to add an article to de_word (German nouns)
+    article_to_add = None
+    if "en_word" in fields:
+        en_content = fields["en_word"]["value"]
         
-        # Check if de_word is already bold or has styling
-        if de_word_content and not re.search(r'<b>|<strong>|font-weight:\s*bold', de_word_content, re.IGNORECASE):
-            # Make the German word bold
-            de_word_bold = f'<b>{de_word_content}</b>'
-            updates["de_word"] = de_word_bold
-            print(f"\n  ✓ Made German word bold: '{de_word_content}'")
+        # 1. Try to find the first definition / list item in the glossary
+        pattern_li = r'<ol[^>]*data-sc-content="glosses"[^>]*>.*?<li[^>]*>(.*?)</li>'
+        li_match = re.search(pattern_li, en_content, re.DOTALL)
+        gender = None
+        if li_match:
+            li_content = li_match.group(1)
+            # Look for gender badge like <span>m</span>, <span>f</span>, <span>n</span>, <span>pl</span>
+            gender_match = re.search(r'<span[^>]*>\s*(m|f|n|pl)\s*</span>', li_content, re.IGNORECASE)
+            if gender_match:
+                gender = gender_match.group(1).lower()
+                
+        # 2. Fallback to searching the entire en_word content if not found in first definition
+        if not gender:
+            gender_match = re.search(r'<span[^>]*>\s*(m|f|n|pl)\s*</span>', en_content, re.IGNORECASE)
+            if gender_match:
+                gender = gender_match.group(1).lower()
+                
+        # Map gender tag to German definite article
+        if gender == 'm':
+            article_to_add = 'der'
+        elif gender == 'f':
+            article_to_add = 'die'
+        elif gender == 'n':
+            article_to_add = 'das'
+        elif gender == 'pl':
+            article_to_add = 'die'
+
+    # Process de_word field to add article and make bold
+    if "de_word" in fields:
+        de_word_raw = fields["de_word"]["value"].strip()
+        de_word_clean = re.sub(r'<[^>]+>', '', de_word_raw).strip()
+        
+        # Check if de_word is a German noun (capitalized in German)
+        is_noun = de_word_clean and de_word_clean[0].isupper()
+        
+        # Check if it already starts with an article (der/die/das/die(pl))
+        starts_with_article = False
+        if de_word_clean:
+            article_match = re.match(r'^(der|die|das)\s+', de_word_clean, re.IGNORECASE)
+            if article_match:
+                starts_with_article = True
+                
+        # Determine if we should add an article
+        should_add_article = is_noun and not starts_with_article and article_to_add is not None
+        
+        if should_add_article:
+            new_word = f"{article_to_add} {de_word_clean}"
+            new_de_word = f"<b>{new_word}</b>"
+            updates["de_word"] = new_de_word
+            print(f"\n  ✓ Added article '{article_to_add}' and made German word bold: '{new_word}'")
             modified = True
-        elif re.search(r'<b>|<strong>|font-weight:\s*bold', de_word_content, re.IGNORECASE):
-            print(f"\n  - German word is already bold")
+        else:
+            # Check if it is not already bold or styled
+            if de_word_raw and not re.search(r'<b>|<strong>|font-weight:\s*bold', de_word_raw, re.IGNORECASE):
+                new_de_word = f"<b>{de_word_clean}</b>"
+                updates["de_word"] = new_de_word
+                print(f"\n  ✓ Made German word bold: '{de_word_clean}'")
+                modified = True
+            else:
+                print(f"\n  - German word is already bold/styled or has article")
     
     # Check if en_word field exists
     if "en_word" in fields:
