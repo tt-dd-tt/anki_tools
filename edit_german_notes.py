@@ -12,6 +12,131 @@ import json
 import requests
 from typing import List, Dict, Any, Optional
 from deep_translator import GoogleTranslator
+import os
+import re
+
+CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gender_cache.json")
+GENDER_CACHE = {}
+
+if os.path.exists(CACHE_FILE):
+    try:
+        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            GENDER_CACHE = json.load(f)
+    except Exception:
+        pass
+
+def save_cache():
+    try:
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(GENDER_CACHE, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def get_gender_from_wiktionary(word, original_word=None):
+    if not word:
+        return None
+        
+    if original_word is None:
+        original_word = word
+        # Check cache first
+        if original_word in GENDER_CACHE:
+            return GENDER_CACHE[original_word]
+            
+    url = "https://de.wiktionary.org/w/api.php"
+    params = {
+        "action": "query",
+        "prop": "revisions",
+        "titles": word,
+        "rvprop": "content",
+        "format": "json",
+        "utf8": 1
+    }
+    headers = {
+        "User-Agent": "AnkiGermanNotesEditor/1.0 (anki-tools@example.com)"
+    }
+    
+    try:
+        response = requests.get(url, params=params, headers=headers)
+        if response.status_code != 200:
+            return None
+            
+        data = response.json()
+        pages = data.get("query", {}).get("pages", {})
+        for page_id, page_data in pages.items():
+            if page_id == "-1":
+                # Try hyphen fallback
+                if "-" in word:
+                    parts = [p.strip() for p in word.split("-") if p.strip()]
+                    if len(parts) > 1:
+                        res = get_gender_from_wiktionary(parts[-1], original_word)
+                        if res:
+                            GENDER_CACHE[original_word] = res
+                            save_cache()
+                            return res
+                return None
+            
+            revisions = page_data.get("revisions", [])
+            if not revisions:
+                return None
+            
+            content = revisions[0].get("*", "")
+            
+            # Check if this page is a plural form
+            is_plural = False
+            if word == original_word:
+                if re.search(r'\*\s*(?:Nominativ|Genitiv|Dativ|Akkusativ)\s+Plural', content, re.IGNORECASE):
+                    is_plural = True
+            
+            # 1. Search for direct noun gender
+            substantiv_matches = list(re.finditer(r'Substantiv\|Deutsch', content))
+            if substantiv_matches:
+                for match in substantiv_matches:
+                    context_after = content[match.end():match.end() + 200]
+                    gender_match = re.search(r'\{\{([mfnpl]+)\}\}', context_after)
+                    if gender_match:
+                        val = gender_match.group(1)
+                        if val in ('m', 'f', 'n', 'pl'):
+                            res = 'pl' if is_plural or val == 'pl' else val
+                            GENDER_CACHE[original_word] = res
+                            save_cache()
+                            return res
+            
+            # 2. Check for inflected form with Grundformverweis
+            base_form_match = re.search(r'\{\{Grundformverweis(?: Dekl)?\|([^|}]+)\}\}', content)
+            if base_form_match:
+                base_word = base_form_match.group(1).strip()
+                gender_res = get_gender_from_wiktionary(base_word, original_word)
+                if is_plural and gender_res in ('m', 'f', 'n'):
+                    gender_res = 'pl'
+                if gender_res:
+                    GENDER_CACHE[original_word] = gender_res
+                    save_cache()
+                    return gender_res
+                
+            # Fallback 3: look for noun link in Plural des Substantivs
+            base_form_match2 = re.search(r'Plural des Substantivs\s+\'\'\'\[\[([^\]|]+)(?:\|[^\]]*)?\]\]\'\'\'', content)
+            if base_form_match2:
+                base_word = base_form_match2.group(1).strip()
+                gender_res = get_gender_from_wiktionary(base_word, original_word)
+                res = 'pl'
+                GENDER_CACHE[original_word] = res
+                save_cache()
+                return res
+            
+            # Fallback 4: Try a global search for Substantiv gender
+            gender_match = re.search(r'\{\{Wortart\|Substantiv\|Deutsch\}\}.*?\{\{([mfnpl]+)\}\}', content, re.DOTALL)
+            if gender_match:
+                val = gender_match.group(1)
+                res = 'pl' if is_plural or val == 'pl' else val
+                GENDER_CACHE[original_word] = res
+                save_cache()
+                return res
+            
+    except Exception as e:
+        print(f"Error fetching from Wiktionary for '{word}': {e}")
+        
+    return None
+
 
 
 class AnkiConnect:
@@ -102,39 +227,7 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
     modified = False
     updates = {}
     
-    # Try to determine gender from en_word to add an article to de_word (German nouns)
-    article_to_add = None
-    if "en_word" in fields:
-        en_content = fields["en_word"]["value"]
-        
-        # 1. Try to find the first definition / list item in the glossary
-        pattern_li = r'<ol[^>]*data-sc-content="glosses"[^>]*>.*?<li[^>]*>(.*?)</li>'
-        li_match = re.search(pattern_li, en_content, re.DOTALL)
-        gender = None
-        if li_match:
-            li_content = li_match.group(1)
-            # Look for gender badge like <span>m</span>, <span>f</span>, <span>n</span>, <span>pl</span>
-            gender_match = re.search(r'<span[^>]*>\s*(m|f|n|pl)\s*</span>', li_content, re.IGNORECASE)
-            if gender_match:
-                gender = gender_match.group(1).lower()
-                
-        # 2. Fallback to searching the entire en_word content if not found in first definition
-        if not gender:
-            gender_match = re.search(r'<span[^>]*>\s*(m|f|n|pl)\s*</span>', en_content, re.IGNORECASE)
-            if gender_match:
-                gender = gender_match.group(1).lower()
-                
-        # Map gender tag to German definite article
-        if gender == 'm':
-            article_to_add = 'der'
-        elif gender == 'f':
-            article_to_add = 'die'
-        elif gender == 'n':
-            article_to_add = 'das'
-        elif gender == 'pl':
-            article_to_add = 'die'
-
-    # Process de_word field to add article and make bold
+    # Process de_word field to make it bold
     if "de_word" in fields:
         de_word_raw = fields["de_word"]["value"].strip()
         de_word_clean = re.sub(r'<[^>]+>', '', de_word_raw).strip()
@@ -148,6 +241,19 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
             article_match = re.match(r'^(der|die|das)\s+', de_word_clean, re.IGNORECASE)
             if article_match:
                 starts_with_article = True
+                
+        # Try to determine gender from Wiktionary to add an article to German nouns
+        article_to_add = None
+        if is_noun and not starts_with_article:
+            gender = get_gender_from_wiktionary(de_word_clean)
+            if gender == 'm':
+                article_to_add = 'der'
+            elif gender == 'f':
+                article_to_add = 'die'
+            elif gender == 'n':
+                article_to_add = 'das'
+            elif gender == 'pl':
+                article_to_add = 'die'
                 
         # Determine if we should add an article
         should_add_article = is_noun and not starts_with_article and article_to_add is not None
