@@ -79,7 +79,17 @@ def get_gender_from_wiktionary(word, original_word=None):
             if not revisions:
                 return None
             
-            content = revisions[0].get("*", "")
+            full_content = revisions[0].get("*", "")
+            
+            # Extract German section to prevent matching other languages
+            content = full_content
+            german_section_match = re.search(r'==\s*[^(]+?\s*\(\{\{Sprache\|Deutsch\}\}\)\s*==(.*?)==\s*[^(]+?\s*\(\{\{Sprache\|', full_content, re.DOTALL)
+            if german_section_match:
+                content = german_section_match.group(1)
+            else:
+                german_section_match = re.search(r'==\s*[^(]+?\s*\(\{\{Sprache\|Deutsch\}\}\)\s*==(.*)', full_content, re.DOTALL)
+                if german_section_match:
+                    content = german_section_match.group(1)
             
             # Check if this page is a plural form
             is_plural = False
@@ -232,8 +242,13 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
         de_word_raw = fields["de_word"]["value"].strip()
         de_word_clean = re.sub(r'<[^>]+>', '', de_word_raw).strip()
         
-        # Check if de_word is a German noun (capitalized in German)
-        is_noun = de_word_clean and de_word_clean[0].isupper()
+        # Extract the first alphabetic/hyphenated word to determine if it is a capitalized German noun
+        word_match = re.search(r'\b([A-Za-zÄÖÜäöüß\-]+)\b', de_word_clean)
+        is_noun = False
+        noun_word = ""
+        if word_match:
+            noun_word = word_match.group(1)
+            is_noun = noun_word[0].isupper()
         
         # Check if it already starts with an article (der/die/das/die(pl))
         starts_with_article = False
@@ -244,8 +259,8 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
                 
         # Try to determine gender from Wiktionary to add an article to German nouns
         article_to_add = None
-        if is_noun and not starts_with_article:
-            gender = get_gender_from_wiktionary(de_word_clean)
+        if is_noun and not starts_with_article and noun_word:
+            gender = get_gender_from_wiktionary(noun_word)
             if gender == 'm':
                 article_to_add = 'der'
             elif gender == 'f':
