@@ -61,5 +61,13 @@
   "Grenze": "f",
   "Feind": "m",
   "Beziehung": "f",
-  "Entwicklung": "f"
+  "Entwicklung": "f",
+  "Zeugnis": "n",
+  "Jacke": "f",
+  "Getränk": "n",
+  "Hemd": "n",
+  "Geschichte": "f",
+  "Kuscheltier": "n",
+  "Märchen": "n",
+  "Nachtisch": "m"
 }
