@@ -142,6 +142,7 @@ The script provides these main methods:
 - If you have the note open in Anki's browser while editing, close and reopen it
 - The changes are saved but may not refresh automatically
 
+
 ## Safety Tips
 
 ⚠️ **Important**: Always backup your Anki collection before running bulk edits!
@@ -151,6 +152,3 @@ The script provides these main methods:
 3. Review the output to ensure changes are correct
 4. You can always restore from backup if needed
 
-## Next Steps
-
-Once you know what edits you want to make, let me know and I'll help you implement the specific logic in the `edit_note()` function!
