@@ -2,4 +2,5 @@
 # Simple wrapper to run the script with the virtual environment
 
 source .venv/bin/activate
-python edit_german_notes.py
+# "$@" forwards flags such as --dry-run; without it they are silently dropped
+python edit_german_notes.py "$@"

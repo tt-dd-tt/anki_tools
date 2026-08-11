@@ -66,6 +66,7 @@ record a word as having no forms. Delete a word's entry to force a fresh lookup.
 
 ```bash
 python edit_german_notes.py --dry-run
+./run.sh --dry-run              # same thing, via the virtualenv wrapper
 ```
 
 Prints the `de_word` value each note *would* get, without writing anything to Anki. Worth
@@ -75,6 +76,7 @@ doing before the first real run.
 
 ```bash
 python edit_german_notes.py
+./run.sh                        # same thing, via the virtualenv wrapper
 ```
 
 Run it a second time to confirm it settles: the summary should report 0 notes modified.
