@@ -19,23 +19,86 @@ This tool allows you to programmatically edit notes in your "german mine" Anki d
 pip install requests
 ```
 
+## What the script does
+
+For every note in the deck, `edit_german_notes.py` enriches the `de_word` field using
+[de.wiktionary.org](https://de.wiktionary.org):
+
+| Word type | Result |
+| --- | --- |
+| Noun | Definite article prepended, nominative plural underneath |
+| Verb | Perfekt (auxiliary + Partizip II) underneath |
+
+```html
+<!-- noun -->
+<b>die Tür</b>
+<div data-anki-forms="1" style="…">die Türen</div>
+
+<!-- verb -->
+<b>gehen</b>
+<div data-anki-forms="1" style="…">ist gegangen</div>
+```
+
+The forms sit on their own line beneath the headword so the card stays visually divided.
+The `data-anki-forms="1"` marker lets the script recognise and rebuild its own output, so
+running it repeatedly is safe — the second run reports no changes.
+
+Words that have nothing to add are left alone: nouns with no plural (*das Erbrechen*),
+words that are already plural (*die Bücher*), and anything without a German Wiktionary
+entry.
+
+It also cleans up the `en_word` field (removes the Etymology block and category tags, adds
+a translation header) and fills an empty `en_sentence` by translating `de_sentence`.
+
+### Caches
+
+Lookups are cached on disk so repeat runs do no network work, and both files are committed:
+
+- `gender_cache.json` — noun genders
+- `forms_cache.json` — plurals and Perfekt forms
+
+Failed requests are deliberately **not** cached, so a network blip cannot permanently
+record a word as having no forms. Delete a word's entry to force a fresh lookup.
+
 ## Usage
 
-### 1. Basic Usage (Inspect Notes)
+### 1. Preview the changes first
 
-Run the script to see all notes in your "german mine" deck:
+```bash
+python edit_german_notes.py --dry-run
+```
+
+Prints the `de_word` value each note *would* get, without writing anything to Anki. Worth
+doing before the first real run.
+
+### 2. Apply the changes
 
 ```bash
 python edit_german_notes.py
 ```
 
-This will display information about each note including:
-- Note ID
-- Model (note type)
-- Tags
-- All fields and their values
+Run it a second time to confirm it settles: the summary should report 0 notes modified.
 
-### 2. Customize Editing Logic
+### 3. Check individual words
+
+```bash
+python check_forms.py            # a sample covering each case
+python check_forms.py Tür gehen  # specific words
+```
+
+Queries Wiktionary and prints the gender, plural and Perfekt it found. Anki does not need
+to be running.
+
+### 4. Run the tests
+
+```bash
+python -m unittest test_forms_parsing
+```
+
+Offline — the wikitext parsing and the `de_word` rendering are covered with fixtures and a
+stubbed network, so no Wiktionary or Anki access is needed.
+
+### 5. Customize Editing Logic
 
 Open `edit_german_notes.py` and modify the `edit_note()` function to implement your specific editing requirements.
 
@@ -148,7 +211,8 @@ The script provides these main methods:
 ⚠️ **Important**: Always backup your Anki collection before running bulk edits!
 
 1. In Anki: `File` → `Export` → Export your collection
-2. Test your editing logic on a few notes first
-3. Review the output to ensure changes are correct
-4. You can always restore from backup if needed
+2. Preview with `python edit_german_notes.py --dry-run` before writing anything
+3. Test your editing logic on a few notes first
+4. Review the output to ensure changes are correct
+5. You can always restore from backup if needed
 
