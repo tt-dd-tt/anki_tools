@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script to edit Anki notes in the "german mine" deck using AnkiConnect.
+Script to edit Anki notes in the "German_lessons" deck using AnkiConnect.
 
 Prerequisites:
 1. Anki must be running
@@ -31,6 +31,28 @@ def save_cache():
             json.dump(GENDER_CACHE, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+GENDER_TO_ARTICLE = {"m": "der", "f": "die", "n": "das", "pl": "die"}
+
+
+def gender_to_article(gender: Optional[str]) -> Optional[str]:
+    """Map a Wiktionary gender code (m/f/n/pl) to its German article."""
+    return GENDER_TO_ARTICLE.get(gender)
+
+
+def build_translation_header(text: str) -> str:
+    """Build the bold blue translation-header div used in the en_word field."""
+    return f'<div style="font-size: 1.8em; font-weight: bold; margin-bottom: 0.5em; color: #2196F3;">{text}</div>'
+
+
+def translate_text(text: str, source: str, target: str) -> Optional[str]:
+    """Translate text via GoogleTranslator. Returns None on failure."""
+    try:
+        return GoogleTranslator(source=source, target=target).translate(text)
+    except Exception:
+        return None
+
 
 def get_gender_from_wiktionary(word, original_word=None):
     if not word:
@@ -261,14 +283,7 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
         article_to_add = None
         if is_noun and not starts_with_article and noun_word:
             gender = get_gender_from_wiktionary(noun_word)
-            if gender == 'm':
-                article_to_add = 'der'
-            elif gender == 'f':
-                article_to_add = 'die'
-            elif gender == 'n':
-                article_to_add = 'das'
-            elif gender == 'pl':
-                article_to_add = 'die'
+            article_to_add = gender_to_article(gender)
                 
         # Determine if we should add an article
         should_add_article = is_noun and not starts_with_article and article_to_add is not None
@@ -362,14 +377,14 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
                     print(f"  ⚠ Translation header exists but is incorrect: '{existing_translation}'")
                     print(f"  ✓ Updating translation header to: '{first_translation}'")
                     # Replace the existing header with the correct one
-                    translation_header = f'<div style="font-size: 1.8em; font-weight: bold; margin-bottom: 0.5em; color: #2196F3;">{first_translation}</div>'
+                    translation_header = build_translation_header(first_translation)
                     new_content = re.sub(translation_header_pattern, translation_header, new_content, count=1)
                     modified = True
                 else:
                     print(f"  - Translation header already correct")
             else:
                 # Add translation as a prominent header at the very beginning
-                translation_header = f'<div style="font-size: 1.8em; font-weight: bold; margin-bottom: 0.5em; color: #2196F3;">{first_translation}</div>'
+                translation_header = build_translation_header(first_translation)
                 new_content = translation_header + new_content
                 print(f"  ✓ Added translation header at the beginning")
                 modified = True
@@ -412,18 +427,15 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
             print(f"\n  ✓ Found German sentence to translate")
             print(f"    DE: {de_sentence[:80]}{'...' if len(de_sentence) > 80 else ''}")
             
-            try:
-                # Translate using Google Translate
-                translator = GoogleTranslator(source='de', target='en')
-                translated = translator.translate(de_sentence)
-                
+            translated = translate_text(de_sentence, 'de', 'en')
+            if translated is not None:
                 print(f"    EN: {translated[:80]}{'...' if len(translated) > 80 else ''}")
                 print(f"  ✓ Translation successful")
-                
+
                 updates["en_sentence"] = translated
                 modified = True
-            except Exception as e:
-                print(f"  ✗ Translation failed: {e}")
+            else:
+                print(f"  ✗ Translation failed")
         elif de_sentence and en_sentence:
             print(f"\n  - en_sentence already has content, skipping translation")
         elif not de_sentence:
@@ -438,8 +450,8 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
 
 
 def main():
-    """Main function to process notes in the 'german mine' deck."""
-    deck_name = "german mine"
+    """Main function to process notes in the 'German_lessons' deck."""
+    deck_name = "German_lessons"
     
     print(f"Connecting to Anki...")
     anki = AnkiConnect()

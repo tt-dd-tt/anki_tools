@@ -15,14 +15,18 @@ import os
 import re
 import json
 import argparse
-import requests
 from typing import List, Dict, Any, Optional, Tuple
 
 # Ensure current directory is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from deep_translator import GoogleTranslator
-from edit_german_notes import get_gender_from_wiktionary, AnkiConnect
+from edit_german_notes import (
+    get_gender_from_wiktionary,
+    AnkiConnect,
+    gender_to_article,
+    build_translation_header,
+    translate_text,
+)
 
 # Terminal Color Codes
 COLOR_RESET = "\033[0m"
@@ -62,16 +66,13 @@ def detect_language(text: str) -> str:
         return 'de'
         
     # 4. Translation heuristic
-    try:
-        tr_de_en = GoogleTranslator(source='de', target='en').translate(text_clean)
-        tr_sk_en = GoogleTranslator(source='sk', target='en').translate(text_clean)
-        
-        if tr_de_en and tr_de_en.lower() != text_clean.lower() and tr_sk_en.lower() == text_clean.lower():
+    tr_de_en = translate_text(text_clean, 'de', 'en')
+    tr_sk_en = translate_text(text_clean, 'sk', 'en')
+    if tr_de_en and tr_sk_en:
+        if tr_de_en.lower() != text_clean.lower() and tr_sk_en.lower() == text_clean.lower():
             return 'de'
-        if tr_sk_en and tr_sk_en.lower() != text_clean.lower() and tr_de_en.lower() == text_clean.lower():
+        if tr_sk_en.lower() != text_clean.lower() and tr_de_en.lower() == text_clean.lower():
             return 'sk'
-    except Exception:
-        pass
         
     # Default fallback to German if capitalized, Slovak otherwise
     if text_clean and text_clean[0].isupper():
@@ -115,14 +116,7 @@ def get_formatted_german_word(raw_word: str) -> Tuple[str, str, Optional[str]]:
                 base_word = base_word.capitalize()
             
         if gender:
-            if gender == 'm':
-                article = 'der'
-            elif gender == 'f':
-                article = 'die'
-            elif gender == 'n':
-                article = 'das'
-            elif gender == 'pl':
-                article = 'die'
+            article = gender_to_article(gender)
             if base_word and base_word[0].isupper():
                 base_word = base_word.capitalize()
                 
@@ -216,32 +210,28 @@ def process_and_add_word(
     if lang == "sk":
         slovak_word = input_word
         print(f"  ➜ Translating Slovak to German & English...")
-        try:
-            german_raw = GoogleTranslator(source='sk', target='de').translate(slovak_word)
-            # Remove leading 'zu ' if verb translation added it
-            if german_raw.lower().startswith("zu ") and len(german_raw.split()) == 2:
-                german_raw = german_raw[3:]
-        except Exception as e:
-            print(f"  {COLOR_RED}Translation SK->DE error: {e}{COLOR_RESET}")
+        german_raw = translate_text(slovak_word, 'sk', 'de')
+        if german_raw is None:
+            print(f"  {COLOR_RED}Translation SK->DE error{COLOR_RESET}")
             german_raw = slovak_word
-            
-        try:
-            english_word = GoogleTranslator(source='sk', target='en').translate(slovak_word)
-        except Exception as e:
-            print(f"  {COLOR_RED}Translation SK->EN error: {e}{COLOR_RESET}")
+        elif german_raw.lower().startswith("zu ") and len(german_raw.split()) == 2:
+            # Remove leading 'zu ' if verb translation added it
+            german_raw = german_raw[3:]
+
+        english_word = translate_text(slovak_word, 'sk', 'en')
+        if english_word is None:
+            print(f"  {COLOR_RED}Translation SK->EN error{COLOR_RESET}")
             english_word = german_raw
     else:
         german_raw = input_word
         print(f"  ➜ Translating German to English & Slovak...")
-        try:
-            english_word = GoogleTranslator(source='de', target='en').translate(german_raw)
-        except Exception as e:
-            print(f"  {COLOR_RED}Translation DE->EN error: {e}{COLOR_RESET}")
+        english_word = translate_text(german_raw, 'de', 'en')
+        if english_word is None:
+            print(f"  {COLOR_RED}Translation DE->EN error{COLOR_RESET}")
             english_word = german_raw
-            
-        try:
-            slovak_word = GoogleTranslator(source='de', target='sk').translate(german_raw)
-        except Exception as e:
+
+        slovak_word = translate_text(german_raw, 'de', 'sk')
+        if slovak_word is None:
             slovak_word = ""
             
     # Format German Word & Article
@@ -263,17 +253,16 @@ def process_and_add_word(
         custom_sentence = custom_sentence.strip()
         print(f"  ➜ Translating provided sentence...")
         if lang == "sk":
-            try:
-                de_sentence = GoogleTranslator(source='sk', target='de').translate(custom_sentence)
-                en_sentence = GoogleTranslator(source='sk', target='en').translate(custom_sentence)
-            except Exception:
+            de_sentence = translate_text(custom_sentence, 'sk', 'de')
+            en_sentence = translate_text(custom_sentence, 'sk', 'en')
+            if de_sentence is None:
                 de_sentence = custom_sentence
+            if en_sentence is None:
                 en_sentence = custom_sentence
         elif lang == "de":
             de_sentence = custom_sentence
-            try:
-                en_sentence = GoogleTranslator(source='de', target='en').translate(custom_sentence)
-            except Exception:
+            en_sentence = translate_text(custom_sentence, 'de', 'en')
+            if en_sentence is None:
                 en_sentence = custom_sentence
     else:
         de_sentence = base_german_word
@@ -281,10 +270,7 @@ def process_and_add_word(
         
     # Format en_word field HTML
     sk_note_html = f'<div style="color: #666; font-size: 1.0em; margin-top: 0.2em;"><i>SK: {slovak_word}</i></div>' if slovak_word else ''
-    en_word_html = (
-        f'<div style="font-size: 1.8em; font-weight: bold; margin-bottom: 0.5em; color: #2196F3;">{english_word}</div>'
-        f'{sk_note_html}'
-    )
+    en_word_html = build_translation_header(english_word) + sk_note_html
     
     fields = {
         "Note ID": base_german_word,
