@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/anki_tools/.claude/hooks/scan-push-for-secrets.sh",
+            "if": "Bash(git push*)",
+            "timeout": 30,
+            "statusMessage": "Scanning outgoing commits for secrets/PII before push..."
+          }
+        ]
+      }
+    ]
+  }
+}
