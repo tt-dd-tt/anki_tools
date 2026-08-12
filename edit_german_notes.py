@@ -74,7 +74,7 @@ def get_gender_from_wiktionary(word, original_word=None):
         "utf8": 1
     }
     headers = {
-        "User-Agent": "AnkiGermanNotesEditor/1.0 (anki-tools@example.com)"
+        "User-Agent": "AnkiGermanNotesEditor/1.0 (https://github.com/tt-dd-tt/anki_tools)"
     }
     
     try:

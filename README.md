@@ -1,6 +1,6 @@
 # Anki Tools - German Vocabulary Helper
 
-Tools for managing German/Slovak vocabulary in the `German_lessons` Anki deck via the AnkiConnect API.
+Tools for managing German/Slovak vocabulary in an Anki deck via the AnkiConnect API. Both tools default to a deck named `German_lessons`, but that's just a default — see below for how to point them at your own deck.
 
 - **`add.sh` / `add_word.py`** — day-to-day tool: add a new word to the deck. This is the primary workflow.
 - **`repair_notes.sh` / `edit_german_notes.py`** — occasional maintenance tool: sweeps every note in the deck and repairs formatting. Optional, run manually when needed.
@@ -24,7 +24,7 @@ pip install -r requirements.txt
 
 ## Adding Vocabulary (`add.sh`)
 
-Add words in **Slovak** or **German** directly to your `German_lessons` Anki deck.
+Add words in **Slovak** or **German** directly to your Anki deck (defaults to `German_lessons`, override with `-d/--deck`).
 
 Features:
 - **Auto Language Detection**: Automatically detects whether input is in Slovak or German.
@@ -61,7 +61,7 @@ Features:
 
 ## Maintenance: Bulk-Repairing Existing Notes (`repair_notes.sh`)
 
-`repair_notes.sh` runs `edit_german_notes.py`, which sweeps **every note** in the `German_lessons` deck and automatically fixes formatting:
+`repair_notes.sh` runs `edit_german_notes.py`, which sweeps **every note** in a deck and automatically fixes formatting. It targets `German_lessons` by default — to point it at a different deck, edit the `deck_name` variable near the top of `main()` in `edit_german_notes.py` (there's no `-d` flag for this script, unlike `add_word.py`).
 
 - Adds a missing `der`/`die`/`das` article and bolds `de_word`, using the same Wiktionary gender lookup as `add_word.py`
 - Strips leftover Etymology `<details>` sections from `en_word`
@@ -94,7 +94,7 @@ This is **not** a dry-run or inspection tool — running it mutates every matchi
 - Check that AnkiConnect is listening on `http://localhost:8765`
 
 ### "No notes found in the specified deck"
-- Verify the deck name is exactly `German_lessons` (case-sensitive), or pass `-d` to target a different deck
+- Verify the deck name is spelled correctly (case-sensitive) — pass `-d` for `add_word.py`, or edit `deck_name` in `edit_german_notes.py` for `repair_notes.sh`
 - Check that the deck exists and contains notes
 
 ### Changes not visible in Anki Browser

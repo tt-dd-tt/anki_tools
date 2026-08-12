@@ -6,7 +6,7 @@
 # (hookSpecificOutput.permissionDecision: allow|deny) to stdout.
 set -uo pipefail
 
-REPO_DIR="/path/to/anki_tools"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 deny() {
   jq -n --arg reason "$1" '{
