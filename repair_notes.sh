@@ -5,4 +5,5 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/.venv/bin/activate"
-python "$SCRIPT_DIR/edit_german_notes.py"
+# "$@" forwards flags such as --dry-run; without it they are silently dropped
+python "$SCRIPT_DIR/edit_german_notes.py" "$@"

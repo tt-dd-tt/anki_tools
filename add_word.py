@@ -26,6 +26,10 @@ from edit_german_notes import (
     gender_to_article,
     build_translation_header,
     translate_text,
+    build_forms_html,
+    forms_line_for,
+    parse_headword,
+    strip_forms_block,
 )
 
 # Terminal Color Codes
@@ -81,8 +85,13 @@ def detect_language(text: str) -> str:
 
 
 def clean_word(word: str) -> str:
-    """Strip HTML tags and trim whitespace."""
-    return re.sub(r'<[^>]+>', '', word).strip()
+    """Strip HTML tags and trim whitespace.
+
+    The forms block is removed first: stripping tags does not insert a separator, so
+    leaving it in would fuse it into the headword ("der Hunddie Hunde") and break the
+    duplicate check.
+    """
+    return re.sub(r'<[^>]+>', '', strip_forms_block(word)).strip()
 
 
 def extract_base_word(word: str) -> Tuple[str, Optional[str]]:
@@ -100,11 +109,16 @@ def extract_base_word(word: str) -> Tuple[str, Optional[str]]:
 def get_formatted_german_word(raw_word: str) -> Tuple[str, str, Optional[str]]:
     """
     Get (de_word_formatted, base_german_word, article).
-    Example: ("<b>der Hund</b>", "Hund", "der")
+    Example: ("<b>der Hund</b><div ...>die Hunde</div>", "Hund", "der")
+
+    The formatted word carries a second line with the noun's plural or the verb's
+    Perfekt, so a freshly added word already has them without waiting for a
+    repair_notes.sh sweep.
     """
     base_word, existing_article = extract_base_word(raw_word)
     article = existing_article
-    
+    gender = None
+
     if existing_article:
         base_word = base_word.capitalize()
     else:
@@ -114,18 +128,25 @@ def get_formatted_german_word(raw_word: str) -> Tuple[str, str, Optional[str]]:
             gender = get_gender_from_wiktionary(base_word.capitalize())
             if gender:
                 base_word = base_word.capitalize()
-            
+
         if gender:
             article = gender_to_article(gender)
             if base_word and base_word[0].isupper():
                 base_word = base_word.capitalize()
-                
+
     if article:
         full_word = f"{article} {base_word}"
     else:
         full_word = base_word
-        
+
     formatted_de_word = f"<b>{full_word}</b>"
+
+    # Strip a reflexive particle ("sich freuen" -> "freuen") before the lookup
+    _, headword = parse_headword(base_word)
+    forms_text = forms_line_for(headword or base_word, gender)
+    if forms_text:
+        formatted_de_word += build_forms_html(forms_text)
+
     return formatted_de_word, base_word, article
 
 

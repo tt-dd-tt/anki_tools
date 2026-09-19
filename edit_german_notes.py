@@ -8,9 +8,10 @@ Prerequisites:
 3. Install required packages: pip install requests deep-translator
 """
 
+import argparse
 import json
 import requests
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from deep_translator import GoogleTranslator
 import os
 import re
@@ -33,7 +34,30 @@ def save_cache():
         pass
 
 
+FORMS_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "forms_cache.json")
+FORMS_CACHE = {}
+
+if os.path.exists(FORMS_CACHE_FILE):
+    try:
+        with open(FORMS_CACHE_FILE, 'r', encoding='utf-8') as f:
+            FORMS_CACHE = json.load(f)
+    except Exception:
+        pass
+
+def save_forms_cache():
+    try:
+        with open(FORMS_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(FORMS_CACHE, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 GENDER_TO_ARTICLE = {"m": "der", "f": "die", "n": "das", "pl": "die"}
+
+WIKTIONARY_URL = "https://de.wiktionary.org/w/api.php"
+WIKTIONARY_HEADERS = {
+    "User-Agent": "AnkiGermanNotesEditor/1.0 (https://github.com/tt-dd-tt/anki_tools)"
+}
 
 
 def gender_to_article(gender: Optional[str]) -> Optional[str]:
@@ -54,17 +78,36 @@ def translate_text(text: str, source: str, target: str) -> Optional[str]:
         return None
 
 
-def get_gender_from_wiktionary(word, original_word=None):
+def extract_german_section(full_content: str) -> str:
+    """Isolate the German part of a Wiktionary page so other languages cannot match."""
+    german_section_match = re.search(r'==\s*[^(]+?\s*\(\{\{Sprache\|Deutsch\}\}\)\s*==(.*?)==\s*[^(]+?\s*\(\{\{Sprache\|', full_content, re.DOTALL)
+    if german_section_match:
+        return german_section_match.group(1)
+
+    german_section_match = re.search(r'==\s*[^(]+?\s*\(\{\{Sprache\|Deutsch\}\}\)\s*==(.*)', full_content, re.DOTALL)
+    if german_section_match:
+        return german_section_match.group(1)
+
+    return full_content
+
+
+# Wikitext of pages already fetched in this run, so looking up a word's gender, plural
+# and Perfekt costs a single HTTP request. Value is None when the page does not exist
+# or could not be fetched.
+_PAGE_CACHE = {}
+
+
+def fetch_german_wikitext(word: str) -> Optional[str]:
+    """Fetch a word's de.wiktionary.org page and return only its German section.
+
+    Returns None if the page does not exist or the request failed.
+    """
     if not word:
         return None
-        
-    if original_word is None:
-        original_word = word
-        # Check cache first
-        if original_word in GENDER_CACHE:
-            return GENDER_CACHE[original_word]
-            
-    url = "https://de.wiktionary.org/w/api.php"
+
+    if word in _PAGE_CACHE:
+        return _PAGE_CACHE[word]
+
     params = {
         "action": "query",
         "prop": "revisions",
@@ -73,101 +116,358 @@ def get_gender_from_wiktionary(word, original_word=None):
         "format": "json",
         "utf8": 1
     }
-    headers = {
-        "User-Agent": "AnkiGermanNotesEditor/1.0 (https://github.com/tt-dd-tt/anki_tools)"
-    }
-    
+
+    content = None
     try:
-        response = requests.get(url, params=params, headers=headers)
-        if response.status_code != 200:
-            return None
-            
-        data = response.json()
-        pages = data.get("query", {}).get("pages", {})
-        for page_id, page_data in pages.items():
-            if page_id == "-1":
-                # Try hyphen fallback
-                if "-" in word:
-                    parts = [p.strip() for p in word.split("-") if p.strip()]
-                    if len(parts) > 1:
-                        res = get_gender_from_wiktionary(parts[-1], original_word)
-                        if res:
-                            GENDER_CACHE[original_word] = res
-                            save_cache()
-                            return res
-                return None
-            
-            revisions = page_data.get("revisions", [])
-            if not revisions:
-                return None
-            
-            full_content = revisions[0].get("*", "")
-            
-            # Extract German section to prevent matching other languages
-            content = full_content
-            german_section_match = re.search(r'==\s*[^(]+?\s*\(\{\{Sprache\|Deutsch\}\}\)\s*==(.*?)==\s*[^(]+?\s*\(\{\{Sprache\|', full_content, re.DOTALL)
-            if german_section_match:
-                content = german_section_match.group(1)
-            else:
-                german_section_match = re.search(r'==\s*[^(]+?\s*\(\{\{Sprache\|Deutsch\}\}\)\s*==(.*)', full_content, re.DOTALL)
-                if german_section_match:
-                    content = german_section_match.group(1)
-            
-            # Check if this page is a plural form
-            is_plural = False
-            if word == original_word:
-                if re.search(r'\*\s*(?:Nominativ|Genitiv|Dativ|Akkusativ)\s+Plural', content, re.IGNORECASE):
-                    is_plural = True
-            
-            # 1. Search for direct noun gender
-            substantiv_matches = list(re.finditer(r'Substantiv\|Deutsch', content))
-            if substantiv_matches:
-                for match in substantiv_matches:
-                    context_after = content[match.end():match.end() + 200]
-                    gender_match = re.search(r'\{\{([mfnpl]+)\}\}', context_after)
-                    if gender_match:
-                        val = gender_match.group(1)
-                        if val in ('m', 'f', 'n', 'pl'):
-                            res = 'pl' if is_plural or val == 'pl' else val
-                            GENDER_CACHE[original_word] = res
-                            save_cache()
-                            return res
-            
-            # 2. Check for inflected form with Grundformverweis
-            base_form_match = re.search(r'\{\{Grundformverweis(?: Dekl)?\|([^|}]+)\}\}', content)
-            if base_form_match:
-                base_word = base_form_match.group(1).strip()
-                gender_res = get_gender_from_wiktionary(base_word, original_word)
-                if is_plural and gender_res in ('m', 'f', 'n'):
-                    gender_res = 'pl'
-                if gender_res:
-                    GENDER_CACHE[original_word] = gender_res
-                    save_cache()
-                    return gender_res
-                
-            # Fallback 3: look for noun link in Plural des Substantivs
-            base_form_match2 = re.search(r'Plural des Substantivs\s+\'\'\'\[\[([^\]|]+)(?:\|[^\]]*)?\]\]\'\'\'', content)
-            if base_form_match2:
-                base_word = base_form_match2.group(1).strip()
-                gender_res = get_gender_from_wiktionary(base_word, original_word)
-                res = 'pl'
-                GENDER_CACHE[original_word] = res
-                save_cache()
-                return res
-            
-            # Fallback 4: Try a global search for Substantiv gender
-            gender_match = re.search(r'\{\{Wortart\|Substantiv\|Deutsch\}\}.*?\{\{([mfnpl]+)\}\}', content, re.DOTALL)
-            if gender_match:
-                val = gender_match.group(1)
-                res = 'pl' if is_plural or val == 'pl' else val
-                GENDER_CACHE[original_word] = res
-                save_cache()
-                return res
-            
+        response = requests.get(WIKTIONARY_URL, params=params, headers=WIKTIONARY_HEADERS)
+        if response.status_code == 200:
+            data = response.json()
+            pages = data.get("query", {}).get("pages", {})
+            for page_id, page_data in pages.items():
+                if page_id == "-1":
+                    break
+
+                revisions = page_data.get("revisions", [])
+                if not revisions:
+                    break
+
+                content = extract_german_section(revisions[0].get("*", ""))
     except Exception as e:
         print(f"Error fetching from Wiktionary for '{word}': {e}")
-        
+
+    _PAGE_CACHE[word] = content
+    return content
+
+
+def get_gender_from_wiktionary(word, original_word=None):
+    if not word:
+        return None
+
+    if original_word is None:
+        original_word = word
+        # Check cache first
+        if original_word in GENDER_CACHE:
+            return GENDER_CACHE[original_word]
+
+    content = fetch_german_wikitext(word)
+    if content is None:
+        # Try hyphen fallback
+        if "-" in word:
+            parts = [p.strip() for p in word.split("-") if p.strip()]
+            if len(parts) > 1:
+                res = get_gender_from_wiktionary(parts[-1], original_word)
+                if res:
+                    GENDER_CACHE[original_word] = res
+                    save_cache()
+                    return res
+        return None
+
+    # Check if this page is a plural form
+    is_plural = False
+    if word == original_word:
+        if re.search(r'\*\s*(?:Nominativ|Genitiv|Dativ|Akkusativ)\s+Plural', content, re.IGNORECASE):
+            is_plural = True
+
+    # 1. Search for direct noun gender
+    substantiv_matches = list(re.finditer(r'Substantiv\|Deutsch', content))
+    if substantiv_matches:
+        for match in substantiv_matches:
+            context_after = content[match.end():match.end() + 200]
+            gender_match = re.search(r'\{\{([mfnpl]+)\}\}', context_after)
+            if gender_match:
+                val = gender_match.group(1)
+                if val in ('m', 'f', 'n', 'pl'):
+                    res = 'pl' if is_plural or val == 'pl' else val
+                    GENDER_CACHE[original_word] = res
+                    save_cache()
+                    return res
+
+    # 2. Check for inflected form with Grundformverweis
+    base_form_match = re.search(r'\{\{Grundformverweis(?: Dekl)?\|([^|}]+)\}\}', content)
+    if base_form_match:
+        base_word = base_form_match.group(1).strip()
+        gender_res = get_gender_from_wiktionary(base_word, original_word)
+        if is_plural and gender_res in ('m', 'f', 'n'):
+            gender_res = 'pl'
+        if gender_res:
+            GENDER_CACHE[original_word] = gender_res
+            save_cache()
+            return gender_res
+
+    # Fallback 3: look for noun link in Plural des Substantivs
+    base_form_match2 = re.search(r'Plural des Substantivs\s+\'\'\'\[\[([^\]|]+)(?:\|[^\]]*)?\]\]\'\'\'', content)
+    if base_form_match2:
+        base_word = base_form_match2.group(1).strip()
+        get_gender_from_wiktionary(base_word, original_word)
+        res = 'pl'
+        GENDER_CACHE[original_word] = res
+        save_cache()
+        return res
+
+    # Fallback 4: Try a global search for Substantiv gender
+    gender_match = re.search(r'\{\{Wortart\|Substantiv\|Deutsch\}\}.*?\{\{([mfnpl]+)\}\}', content, re.DOTALL)
+    if gender_match:
+        val = gender_match.group(1)
+        res = 'pl' if is_plural or val == 'pl' else val
+        GENDER_CACHE[original_word] = res
+        save_cache()
+        return res
+
     return None
+
+
+def parse_overview_template(content: str, template_name: str) -> Dict[str, str]:
+    """Parse a {{<template_name> |Key=Value |...}} block into a dict of parameters.
+
+    Braces are matched by depth rather than with a flat regex because parameter values
+    legitimately contain nested {{...}} and [[...]].
+    """
+    if not content:
+        return {}
+
+    start = content.find("{{" + template_name)
+    if start == -1:
+        return {}
+
+    # Walk forward from the opening braces to their matching close
+    depth = 0
+    end = None
+    i = start
+    while i < len(content) - 1:
+        pair = content[i:i + 2]
+        if pair == "{{":
+            depth += 1
+            i += 2
+        elif pair == "}}":
+            depth -= 1
+            i += 2
+            if depth == 0:
+                end = i
+                break
+        else:
+            i += 1
+
+    if end is None:
+        return {}
+
+    body = content[start + 2:end - 2]
+
+    # Split the body on pipes that are not nested inside another template or link
+    parts = []
+    buffer = []
+    depth = 0
+    j = 0
+    while j < len(body):
+        pair = body[j:j + 2]
+        if pair in ("{{", "[["):
+            depth += 1
+            buffer.append(pair)
+            j += 2
+        elif pair in ("}}", "]]"):
+            depth = max(depth - 1, 0)
+            buffer.append(pair)
+            j += 2
+        elif body[j] == "|" and depth == 0:
+            parts.append("".join(buffer))
+            buffer = []
+            j += 1
+        else:
+            buffer.append(body[j])
+            j += 1
+    parts.append("".join(buffer))
+
+    params = {}
+    for part in parts[1:]:  # parts[0] is the template name itself
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        params[key.strip()] = value.strip()
+
+    return params
+
+
+def clean_wikitext_value(value: str) -> str:
+    """Reduce a template parameter value to the plain word(s) it contains."""
+    value = re.sub(r'<!--.*?-->', '', value, flags=re.DOTALL)
+    value = re.sub(r'\{\{[^{}]*\}\}', '', value)          # footnote markers such as {{Anm.|…}}
+    value = re.sub(r'\[\[(?:[^\]|]*\|)?([^\]]+)\]\]', r'\1', value)
+    value = re.sub(r"'{2,}", '', value)
+    value = re.sub(r'<[^>]+>', '', value)
+    return ' '.join(value.split())
+
+
+def has_wortart(content: Optional[str], wortart: str) -> bool:
+    """True if the German section declares the given part of speech."""
+    return bool(re.search(r'\{\{Wortart\|' + wortart + r'\|Deutsch\}\}', content or ''))
+
+
+def get_noun_plural(content: Optional[str]) -> Optional[str]:
+    """Return the nominative plural with its article, e.g. 'die Türen'.
+
+    None when the word is not a noun or has no plural (Singularetantum).
+    """
+    if not has_wortart(content, "Substantiv"):
+        return None
+
+    params = parse_overview_template(content, "Deutsch Substantiv Übersicht")
+    for key, value in params.items():
+        # Covers 'Nominativ Plural', numbered variants ('Nominativ Plural 1') and
+        # footnote-marked ones ('Nominativ Plural*')
+        if key.startswith("Nominativ Plural"):
+            plural = clean_wikitext_value(value)
+            if plural:
+                # Every German plural takes 'die' in the nominative
+                return f"die {plural}"
+
+    return None
+
+
+def get_verb_perfekt(content: Optional[str]) -> Optional[str]:
+    """Return the Perfekt as auxiliary + Partizip II, e.g. 'ist gegangen'.
+
+    None when the word is not a verb or has no participle listed.
+    """
+    if not has_wortart(content, "Verb"):
+        return None
+
+    params = parse_overview_template(content, "Deutsch Verb Übersicht")
+
+    partizip = None
+    for key, value in params.items():
+        if key.startswith("Partizip II"):
+            partizip = clean_wikitext_value(value)
+            if partizip:
+                break
+
+    if not partizip:
+        return None
+
+    auxiliaries = " ".join(
+        clean_wikitext_value(value).lower()
+        for key, value in params.items()
+        if key.startswith("Hilfsverb")
+    )
+
+    takes_sein = "sein" in auxiliaries
+    takes_haben = "haben" in auxiliaries
+    if takes_sein and takes_haben:
+        auxiliary = "hat/ist"
+    elif takes_sein:
+        auxiliary = "ist"
+    else:
+        # Default to 'haben', which is by far the more common auxiliary
+        auxiliary = "hat"
+
+    return f"{auxiliary} {partizip}"
+
+
+def get_word_forms(word: str) -> Dict[str, Optional[str]]:
+    """Look up a word's plural and Perfekt, caching results in forms_cache.json.
+
+    Both are resolved together: they come from the same page, so a word only ever
+    needs one lookup regardless of its part of speech.
+    """
+    empty = {"plural": None, "perfekt": None}
+    if not word:
+        return empty
+
+    if word in FORMS_CACHE:
+        return FORMS_CACHE[word]
+
+    content = fetch_german_wikitext(word)
+    if content is None:
+        # Missing page or failed request - do not cache, so a network blip does not
+        # permanently record the word as having no forms
+        return empty
+
+    forms = {
+        "plural": get_noun_plural(content),
+        "perfekt": get_verb_perfekt(content),
+    }
+    FORMS_CACHE[word] = forms
+    save_forms_cache()
+    return forms
+
+
+ARTICLE_PATTERN = re.compile(r'^(der|die|das)\s+', re.IGNORECASE)
+PARTICLE_PATTERN = re.compile(r'^(sich|etw\.|jdn\.|jdm\.|jds\.|etwas|jemanden|jemandem)\s+', re.IGNORECASE)
+WORD_PATTERN = re.compile(r'\b([A-Za-zÄÖÜäöüß\-]+)\b')
+
+
+def parse_headword(text: str) -> Tuple[Optional[str], str]:
+    """Split a cleaned de_word into (article, headword).
+
+    A leading article added by a previous run and leading reflexive or placeholder
+    particles are stripped, so both 'der Drohnenangriff' and 'sich freuen' yield the
+    word that Wiktionary should be asked about.
+    """
+    rest = (text or "").strip()
+
+    article = None
+    article_match = ARTICLE_PATTERN.match(rest)
+    if article_match:
+        article = article_match.group(1).lower()
+        rest = rest[article_match.end():]
+
+    particle_match = PARTICLE_PATTERN.match(rest)
+    while particle_match:
+        rest = rest[particle_match.end():]
+        particle_match = PARTICLE_PATTERN.match(rest)
+
+    word_match = WORD_PATTERN.search(rest)
+    return article, word_match.group(1) if word_match else ""
+
+
+def guess_part_of_speech(headword: str) -> Optional[str]:
+    """'noun' for capitalised words, 'verb' for candidate infinitives, else None.
+
+    Only decides whether a lookup is worth making - the part of speech is confirmed
+    against the Wiktionary entry before any form is written.
+    """
+    if not headword:
+        return None
+    if headword[0].isupper():
+        return "noun"
+    if headword.endswith("n"):  # German infinitives all end in -n
+        return "verb"
+    return None
+
+
+FORMS_STYLE = "font-size:0.85em; color:#666; margin-top:0.15em;"
+FORMS_BLOCK_PATTERN = re.compile(r'<div\s+data-anki-forms="1".*?</div>', re.DOTALL | re.IGNORECASE)
+
+
+def strip_forms_block(html: Optional[str]) -> str:
+    """Remove a forms block written by an earlier run."""
+    return FORMS_BLOCK_PATTERN.sub('', html or '')
+
+
+def build_forms_html(text: str) -> str:
+    """Render the forms line that sits underneath the headword."""
+    return f'<div data-anki-forms="1" style="{FORMS_STYLE}">{text}</div>'
+
+
+def forms_line_for(headword: str, gender: Optional[str] = None) -> Optional[str]:
+    """The extra form worth showing for a headword: plural for nouns, Perfekt for verbs.
+
+    Pass ``gender`` when it is already known to save a repeated lookup. Returns None
+    when there is nothing useful to add.
+    """
+    part_of_speech = guess_part_of_speech(headword)
+    if not part_of_speech or not headword:
+        return None
+
+    forms = get_word_forms(headword)
+
+    if part_of_speech == "noun":
+        if gender is None:
+            gender = get_gender_from_wiktionary(headword)
+        # A word that is itself a plural has no further plural to show
+        if gender == 'pl':
+            return None
+        return forms.get("plural")
+
+    return forms.get("perfekt")
 
 
 
@@ -232,20 +532,18 @@ class AnkiConnect:
         self.invoke("removeTags", notes=note_ids, tags=tags)
 
 
-def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
+def edit_note(note_info: Dict[str, Any], anki: AnkiConnect, dry_run: bool = False) -> bool:
     """
     Edit a single note. Customize this function based on your needs.
-    
+
     Args:
         note_info: Dictionary containing note information
         anki: AnkiConnect instance
-    
+        dry_run: When True, report the changes without writing them back to Anki
+
     Returns:
         True if the note was modified, False otherwise
     """
-    import re
-    from html.parser import HTMLParser
-    
     note_id = note_info["noteId"]
     fields = note_info["fields"]
     tags = note_info["tags"]
@@ -259,51 +557,50 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
     modified = False
     updates = {}
     
-    # Process de_word field to make it bold
+    # Process de_word: bold headword with its article, plural/Perfekt underneath
     if "de_word" in fields:
-        de_word_raw = fields["de_word"]["value"].strip()
+        de_word_original = fields["de_word"]["value"].strip()
+
+        # Drop any forms block from an earlier run *before* flattening to text. Stripping
+        # tags does not insert a separator, so a leftover block would fuse into the
+        # headword ("die Tuerdie Tueren") and poison the lookup on every later run.
+        de_word_raw = strip_forms_block(de_word_original).strip()
         de_word_clean = re.sub(r'<[^>]+>', '', de_word_raw).strip()
-        
-        # Extract the first alphabetic/hyphenated word to determine if it is a capitalized German noun
-        word_match = re.search(r'\b([A-Za-zÄÖÜäöüß\-]+)\b', de_word_clean)
-        is_noun = False
-        noun_word = ""
-        if word_match:
-            noun_word = word_match.group(1)
-            is_noun = noun_word[0].isupper()
-        
-        # Check if it already starts with an article (der/die/das/die(pl))
-        starts_with_article = False
-        if de_word_clean:
-            article_match = re.match(r'^(der|die|das)\s+', de_word_clean, re.IGNORECASE)
-            if article_match:
-                starts_with_article = True
-                
-        # Try to determine gender from Wiktionary to add an article to German nouns
-        article_to_add = None
-        if is_noun and not starts_with_article and noun_word:
-            gender = get_gender_from_wiktionary(noun_word)
-            article_to_add = gender_to_article(gender)
-                
-        # Determine if we should add an article
-        should_add_article = is_noun and not starts_with_article and article_to_add is not None
-        
-        if should_add_article:
-            new_word = f"{article_to_add} {de_word_clean}"
-            new_de_word = f"<b>{new_word}</b>"
+
+        article, headword = parse_headword(de_word_clean)
+        part_of_speech = guess_part_of_speech(headword)
+
+        # Look up the gender of nouns, both to add a missing article and to recognise
+        # words that are already plural
+        gender = None
+        if part_of_speech == "noun" and headword:
+            gender = get_gender_from_wiktionary(headword)
+
+        article_added = None
+        if part_of_speech == "noun" and article is None:
+            article_added = gender_to_article(gender)
+            if article_added:
+                de_word_clean = f"{article_added} {de_word_clean}"
+
+        new_de_word = f"<b>{de_word_clean}</b>" if de_word_clean else de_word_original
+
+        # Second line: the plural for nouns, the Perfekt for verbs
+        forms_text = forms_line_for(headword, gender) if headword else None
+        if forms_text:
+            new_de_word += build_forms_html(forms_text)
+
+        if new_de_word != de_word_original:
             updates["de_word"] = new_de_word
-            print(f"\n  ✓ Added article '{article_to_add}' and made German word bold: '{new_word}'")
             modified = True
-        else:
-            # Check if it is not already bold or styled
-            if de_word_raw and not re.search(r'<b>|<strong>|font-weight:\s*bold', de_word_raw, re.IGNORECASE):
-                new_de_word = f"<b>{de_word_clean}</b>"
-                updates["de_word"] = new_de_word
-                print(f"\n  ✓ Made German word bold: '{de_word_clean}'")
-                modified = True
+            if article_added:
+                print(f"\n  ✓ Added article '{article_added}': '{de_word_clean}'")
             else:
-                print(f"\n  - German word is already bold/styled or has article")
-    
+                print(f"\n  ✓ Updated German word: '{de_word_clean}'")
+            if forms_text:
+                print(f"  ✓ Added forms: '{forms_text}'")
+        else:
+            print(f"\n  - German word already up to date")
+
     # Check if en_word field exists
     if "en_word" in fields:
         en_word_content = fields["en_word"]["value"]
@@ -443,15 +740,25 @@ def edit_note(note_info: Dict[str, Any], anki: AnkiConnect) -> bool:
     
     # Update the note if modified
     if modified and updates:
+        if dry_run:
+            print(f"\n  [dry run] would update {', '.join(updates)}:")
+            for field_name, value in updates.items():
+                preview = value if len(value) <= 300 else value[:300] + "..."
+                print(f"    {field_name}: {preview}")
+            return True
+
         anki.update_note_fields(note_id, updates)
         return True
-    
+
     return False
 
 
-def main():
+def main(dry_run: bool = False):
     """Main function to process notes in the 'German_lessons' deck."""
     deck_name = "German_lessons"
+
+    if dry_run:
+        print("Running in dry-run mode - no notes will be modified.\n")
     
     print(f"Connecting to Anki...")
     anki = AnkiConnect()
@@ -493,9 +800,9 @@ def main():
     for i, note_info in enumerate(notes_info, 1):
         print(f"\n[{i}/{len(notes_info)}]", end="")
         try:
-            if edit_note(note_info, anki):
+            if edit_note(note_info, anki, dry_run=dry_run):
                 modified_count += 1
-                print("  ✓ Modified")
+                print("  ✓ Modified" if not dry_run else "  ✓ Would be modified")
             else:
                 print("  - No changes")
         except Exception as e:
@@ -505,9 +812,18 @@ def main():
     print(f"\n{'='*60}")
     print(f"Summary:")
     print(f"  Total notes processed: {len(notes_info)}")
-    print(f"  Notes modified: {modified_count}")
+    print(f"  Notes {'that would be modified' if dry_run else 'modified'}: {modified_count}")
     print(f"  Notes unchanged: {len(notes_info) - modified_count}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Sweep every note in the deck and repair its formatting."
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the changes that would be made without writing them to Anki",
+    )
+    args = parser.parse_args()
+    main(dry_run=args.dry_run)
